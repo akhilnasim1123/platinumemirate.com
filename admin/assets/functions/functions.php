@@ -10,36 +10,98 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
+// Detect if POST data was discarded because upload exceeded PHP's post_max_size
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST) && empty($_FILES) && isset($_SERVER['CONTENT_LENGTH']) && (int)$_SERVER['CONTENT_LENGTH'] > 0) {
+    $max_post = ini_get('post_max_size');
+    $referer = !empty($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : '../../index.php';
+    $separator = (strpos($referer, '?') !== false) ? '&' : '?';
+    header("Location: " . $referer . $separator . "error=" . urlencode("Total upload size exceeds server limit (post_max_size: $max_post). Please upload smaller images."));
+    exit();
+}
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
 use PHPMailer\PHPMailer\Exception;
 
-require_once dirname(__DIR__, 6) . '/shared-libs/PHPMailer/src/PHPMailer.php';
-require_once dirname(__DIR__, 6) . '/shared-libs/PHPMailer/src/SMTP.php';
-require_once dirname(__DIR__, 6) . '/shared-libs/PHPMailer/src/Exception.php';
+if (file_exists(dirname(__DIR__, 6) . '/shared-libs/PHPMailer/src/PHPMailer.php')) {
+    require_once dirname(__DIR__, 6) . '/shared-libs/PHPMailer/src/PHPMailer.php';
+    require_once dirname(__DIR__, 6) . '/shared-libs/PHPMailer/src/SMTP.php';
+    require_once dirname(__DIR__, 6) . '/shared-libs/PHPMailer/src/Exception.php';
+}
 
-
-function compress($source, $destination, $quality)
+function compress($source, $destination, $quality = 50)
 {
-
-    $info = getimagesize($source);
-    if ($info['mime'] == 'image/jpeg' || $info['mime'] == 'image/jpg') {
-        $image = imagecreatefromjpeg($source);
-
-        imagejpeg($image, $destination, $quality);
-
-        return $destination;
-    } else {
-
-        move_uploaded_file($source, $destination);
-        // copy($source,$destination);
+    if (!file_exists($source) && !is_uploaded_file($source)) {
+        return false;
     }
+
+    $info = @getimagesize($source);
+    if (!$info) {
+        if ($source !== $destination) {
+            if (is_uploaded_file($source)) {
+                move_uploaded_file($source, $destination);
+            } else {
+                copy($source, $destination);
+            }
+        }
+        return $destination;
+    }
+
+    $mime = strtolower($info['mime']);
+
+    if ($mime == 'image/jpeg' || $mime == 'image/jpg') {
+        $image = @imagecreatefromjpeg($source);
+        if ($image) {
+            imagejpeg($image, $destination, $quality);
+            imagedestroy($image);
+            if ($source !== $destination && is_uploaded_file($source)) {
+                @unlink($source);
+            }
+            return $destination;
+        }
+    } else if ($mime == 'image/webp') {
+        if (function_exists('imagecreatefromwebp')) {
+            $image = @imagecreatefromwebp($source);
+            if ($image) {
+                imagewebp($image, $destination, $quality);
+                imagedestroy($image);
+                if ($source !== $destination && is_uploaded_file($source)) {
+                    @unlink($source);
+                }
+                return $destination;
+            }
+        }
+    } else if ($mime == 'image/png') {
+        if (function_exists('imagecreatefrompng')) {
+            $image = @imagecreatefrompng($source);
+            if ($image) {
+                imagealphablending($image, false);
+                imagesavealpha($image, true);
+                $pngQuality = max(0, min(9, (int)(9 - ($quality * 9 / 100))));
+                imagepng($image, $destination, $pngQuality);
+                imagedestroy($image);
+                if ($source !== $destination && is_uploaded_file($source)) {
+                    @unlink($source);
+                }
+                return $destination;
+            }
+        }
+    }
+
+    if ($source !== $destination) {
+        if (is_uploaded_file($source)) {
+            move_uploaded_file($source, $destination);
+        } else {
+            copy($source, $destination);
+        }
+    }
+    return $destination;
 }
 
 if (isset($_POST['logout'])) {
     unset($_SESSION['habrix_admin_loggedin']);
     header("Location:../../login.php");
+    exit();
 }
 
 if (isset($_POST["login"])) {
@@ -90,15 +152,14 @@ if (isset($_POST["login"])) {
 
 
 if (isset($_POST["add_project"])) {
-    $cover_alt = mysqli_real_escape_string($con, $_POST["cover_alt"]);
-    $title = mysqli_real_escape_string($con, $_POST["title"]);
-    $category = mysqli_real_escape_string($con, $_POST["category"]);
-    $location = mysqli_real_escape_string($con, $_POST["location"]);
-    $description = mysqli_real_escape_string($con, $_POST["description"]);
+    $cover_alt = isset($_POST["cover_alt"]) ? mysqli_real_escape_string($con, $_POST["cover_alt"]) : '';
+    $title = isset($_POST["title"]) ? mysqli_real_escape_string($con, $_POST["title"]) : '';
+    $category = isset($_POST["category"]) ? mysqli_real_escape_string($con, $_POST["category"]) : '';
+    $location = isset($_POST["location"]) ? mysqli_real_escape_string($con, $_POST["location"]) : '';
+    $description = isset($_POST["description"]) ? mysqli_real_escape_string($con, $_POST["description"]) : '';
 
-
-    $m_img = $_FILES["img"]["name"];
-    $tmp_name = $_FILES["img"]["tmp_name"];
+    $m_img = isset($_FILES["img"]["name"]) ? $_FILES["img"]["name"] : '';
+    $tmp_name = isset($_FILES["img"]["tmp_name"]) ? $_FILES["img"]["tmp_name"] : '';
     
     // Generate unique keyword
     $keyword = strtolower(str_replace([" ", "&"], "-", $title));
@@ -113,7 +174,7 @@ if (isset($_POST["add_project"])) {
         }
     }
 
-    $sql = "INSERT INTO tbl_projects(title, cover_img, cover_alt,category,  location, description, keyword) 
+    $sql = "INSERT INTO tbl_projects(title, cover_img, cover_alt, category, location, description, keyword) 
             VALUES('$title', '$m_img', '$cover_alt', '$category', '$location', '$description', '$keyword')";
 
     if (mysqli_query($con, $sql)) {
@@ -124,42 +185,51 @@ if (isset($_POST["add_project"])) {
             mkdir($project_img_dir, 0755, true);
         }
 
-        if ($m_img && move_uploaded_file($tmp_name, $project_img_dir . "/" . $m_img)) {
-            compress($project_img_dir . "/" . $m_img, $project_img_dir . "/" . $m_img, 50);
-        } else {
-            die("Failed to move uploaded cover image.");
+        if (!empty($m_img) && !empty($tmp_name) && is_uploaded_file($tmp_name)) {
+            $dest = $project_img_dir . "/" . $m_img;
+            if (move_uploaded_file($tmp_name, $dest)) {
+                compress($dest, $dest, 50);
+            }
         }
 
-        if (isset($_FILES["images"])) {
-                $img = $_FILES["images"]["name"];
-                $tmp_name = $_FILES["images"]["tmp_name"];
-                $alt = $_POST["alt"];
-                $allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
-            
-                for ($sl = 0; $sl < count($img); $sl++) {
-                    $image = mysqli_real_escape_string($con, basename($img[$sl]));
-            
-                    if (!in_array($_FILES['images']['type'][$sl], $allowedTypes) || $_FILES['images']['error'][$sl] !== UPLOAD_ERR_OK) {
-                        echo "Error or unsupported file type for image: $image";
-                        continue;
-                    }
-            
-                    $psql = "INSERT INTO tbl_project_img(pid, img, img_alt) VALUES('$pid', '$image', '" . mysqli_real_escape_string($con, $alt[$sl]) . "')";
-                    if (mysqli_query($con, $psql)) {
-                        if (move_uploaded_file($tmp_name[$sl], $project_img_dir . "/" . $image)) {
-                            compress($project_img_dir . "/" . $image, $project_img_dir . "/" . $image, 50);
-                        } else {
-                            echo "Failed to move uploaded file: $image";
-                        }
-                    } else {
-                        echo "Failed to insert image into database: " . mysqli_error($con);
+        if (isset($_FILES["images"]) && isset($_FILES["images"]["name"]) && is_array($_FILES["images"]["name"])) {
+            $img = $_FILES["images"]["name"];
+            $tmp_names = $_FILES["images"]["tmp_name"];
+            $alt = isset($_POST["alt"]) && is_array($_POST["alt"]) ? $_POST["alt"] : [];
+            $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg'];
+        
+            for ($sl = 0; $sl < count($img); $sl++) {
+                if (empty($img[$sl]) || empty($tmp_names[$sl]) || (isset($_FILES['images']['error'][$sl]) && $_FILES['images']['error'][$sl] === UPLOAD_ERR_NO_FILE)) {
+                    continue;
+                }
+                
+                if (isset($_FILES['images']['error'][$sl]) && $_FILES['images']['error'][$sl] !== UPLOAD_ERR_OK) {
+                    continue;
+                }
+
+                $file_type = isset($_FILES['images']['type'][$sl]) ? $_FILES['images']['type'][$sl] : '';
+                if (!in_array($file_type, $allowedTypes)) {
+                    continue;
+                }
+
+                $image = mysqli_real_escape_string($con, basename($img[$sl]));
+                $alt_val = isset($alt[$sl]) ? mysqli_real_escape_string($con, $alt[$sl]) : '';
+        
+                $psql = "INSERT INTO tbl_project_img(pid, img, img_alt) VALUES('$pid', '$image', '$alt_val')";
+                if (mysqli_query($con, $psql)) {
+                    $dest_img = $project_img_dir . "/" . $image;
+                    if (move_uploaded_file($tmp_names[$sl], $dest_img)) {
+                        compress($dest_img, $dest_img, 50);
                     }
                 }
             }
+        }
 
         header("Location: ../../projects.php?success=Project added successfully");
+        exit();
     } else {
-        header("Location: ../../projects.php?error=Failed to add Project!");
+        header("Location: ../../add_project.php?error=Failed to add Project: " . urlencode(mysqli_error($con)));
+        exit();
     }
 }
 
@@ -176,23 +246,24 @@ if (isset($_POST["delete_project"])) {
     $project_img_dir = "../../../assets/img/projects/" . $id;
     deleteDirectory($project_img_dir);
     header("Location: ../../projects.php?success=Project deleted successfully");
+    exit();
 }
 
 
 if (isset($_POST["update_project"])) {
     $id = mysqli_real_escape_string($con, $_POST["id"]);
-    $cover_alt = mysqli_real_escape_string($con, $_POST["cover_alt"]);
-    $title = mysqli_real_escape_string($con, $_POST["title"]);
-    $category = mysqli_real_escape_string($con, $_POST["category"]);
-    $location = mysqli_real_escape_string($con, $_POST["location"]);
-    $description = mysqli_real_escape_string($con, $_POST["description"]);
-    $old_cover = mysqli_real_escape_string($con, $_POST["old_cover"]);
+    $cover_alt = isset($_POST["cover_alt"]) ? mysqli_real_escape_string($con, $_POST["cover_alt"]) : '';
+    $title = isset($_POST["title"]) ? mysqli_real_escape_string($con, $_POST["title"]) : '';
+    $category = isset($_POST["category"]) ? mysqli_real_escape_string($con, $_POST["category"]) : '';
+    $location = isset($_POST["location"]) ? mysqli_real_escape_string($con, $_POST["location"]) : '';
+    $description = isset($_POST["description"]) ? mysqli_real_escape_string($con, $_POST["description"]) : '';
+    $old_cover = isset($_POST["old_cover"]) ? mysqli_real_escape_string($con, $_POST["old_cover"]) : '';
 
     $keyword = str_replace(" ", "-", strtolower($title));
     $keyword = str_replace("&", "-", strtolower($keyword));
     $is_keyword = false;
     while ($is_keyword == false) {
-        $check_keyword = "select * from tbl_projects where keyword='$keyword'";
+        $check_keyword = "SELECT * FROM tbl_projects WHERE keyword='$keyword' AND id != '$id'";
         $run_keyword = mysqli_query($con, $check_keyword);
         $keyword_count = mysqli_num_rows($run_keyword);
         if ($keyword_count === 0) {
@@ -202,22 +273,27 @@ if (isset($_POST["update_project"])) {
         }
     }
 
-    $m_img = "";
-    if ($_FILES['img']['size'] != 0) {
+    $m_img = $old_cover;
+    $project_dir = "../../../assets/img/projects/" . $id;
+    if (!file_exists($project_dir)) {
+        mkdir($project_dir, 0755, true);
+    }
+
+    if (isset($_FILES['img']) && !empty($_FILES['img']['size']) && $_FILES['img']['error'] === UPLOAD_ERR_OK) {
         $m_img = mysqli_real_escape_string($con, $_FILES["img"]["name"]);
         $tmp_name = $_FILES["img"]["tmp_name"];
+        $to = $project_dir . "/" . $m_img;
 
-        $to = "../../../assets/img/projects/" . $id . "/" . $m_img;
-
-
-        $old_img_path = "../../../assets/img/projects/" . $id . "/" . $old_cover;
-        if (file_exists($old_img_path)) {
-            unlink($old_img_path);
+        if (!empty($old_cover)) {
+            $old_img_path = $project_dir . "/" . $old_cover;
+            if (file_exists($old_img_path)) {
+                unlink($old_img_path);
+            }
         }
 
-        compress($tmp_name, $to, 50);
-    } else {
-        $m_img = $old_cover;
+        if (move_uploaded_file($tmp_name, $to)) {
+            compress($to, $to, 50);
+        }
     }
 
     $sql = "UPDATE tbl_projects SET 
@@ -233,68 +309,54 @@ if (isset($_POST["update_project"])) {
     $run = mysqli_query($con, $sql);
     if ($run) {
         $isql = "DELETE FROM tbl_project_img WHERE pid='$id'";
-        $irun = mysqli_query($con, $isql);
+        mysqli_query($con, $isql);
 
-        if ($irun) {
+        $alt = isset($_POST["alt"]) && is_array($_POST["alt"]) ? $_POST["alt"] : [];
+        $old_img = isset($_POST["old_images"]) && is_array($_POST["old_images"]) ? $_POST["old_images"] : [];
 
-            $isql = "DELETE FROM tbl_project_img WHERE pid='$id'";
-            $irun = mysqli_query($con, $isql);
+        if (isset($_FILES['images']) && isset($_FILES['images']['name']) && is_array($_FILES['images']['name'])) {
+            $img = $_FILES["images"]["name"];
+            $tmp_name3 = $_FILES["images"]["tmp_name"];
 
-            if ($irun) {
-                if (isset($_FILES['images'])) {
-                    $img = $_FILES["images"]["name"];
-                    $tmp_name3 = $_FILES["images"]["tmp_name"];
-                    $alt = $_POST["alt"];
+            foreach ($img as $key => $image) {
+                if (!empty($image) && isset($tmp_name3[$key]) && is_uploaded_file($tmp_name3[$key])) {
+                    $image_name = mysqli_real_escape_string($con, basename($image));
+                    $alt_text = isset($alt[$key]) ? mysqli_real_escape_string($con, $alt[$key]) : '';
 
-                    $old_img = $_POST["old_images"];
-                    $project_dir = "../../../assets/img/projects/" . $id;
+                    $idsql = "INSERT INTO tbl_project_img(pid, img, img_alt) VALUES('$id', '$image_name', '$alt_text')";
+                    $idrun = mysqli_query($con, $idsql);
 
-                    foreach ($img as $key => $image) {
-                        if ($image) {
-                            $alt_text = mysqli_real_escape_string($con, $alt[$key]);
-
-                            $idsql = "INSERT INTO tbl_project_img(pid, img, img_alt) VALUES('$id', '$image', '$alt_text')";
-                            $idrun = mysqli_query($con, $idsql);
-
-                            if ($idrun) {
-                                $to = $project_dir . "/" . $image;
-                                compress($tmp_name3[$key], $to, 50);
-                            } else {
-                                header("Location: ../../projects.php?error=Failed to insert new image into database!");
-                                exit;
-                            }
-                        } else {
-                            $image = $old_img[$key];
-                            $alt_text = mysqli_real_escape_string($con, $alt[$key]);
-
-                            if ($image !== '0') {
-                                $idsql = "INSERT INTO tbl_project_img(pid, img, img_alt) VALUES('$id', '$image', '$alt_text')";
-                                $idrun = mysqli_query($con, $idsql);
-
-                                if (!$idrun) {
-                                    header("Location: ../../projects.php?error=Failed to update image information!");
-                                    exit;
-                                }
-                            }
+                    if ($idrun) {
+                        $to = $project_dir . "/" . $image_name;
+                        if (move_uploaded_file($tmp_name3[$key], $to)) {
+                            compress($to, $to, 50);
                         }
                     }
+                } else if (isset($old_img[$key]) && $old_img[$key] !== '0' && !empty($old_img[$key])) {
+                    $image_name = mysqli_real_escape_string($con, $old_img[$key]);
+                    $alt_text = isset($alt[$key]) ? mysqli_real_escape_string($con, $alt[$key]) : '';
 
-                    header("Location: ../../projects.php?success=Project Updated Successfully");
-                } else {
-                    header("Location: ../../projects.php?error=Failed to Update Project!");
+                    $idsql = "INSERT INTO tbl_project_img(pid, img, img_alt) VALUES('$id', '$image_name', '$alt_text')";
+                    mysqli_query($con, $idsql);
                 }
             }
-        } else {
-            header("Location: ../../projects.php?error=Failed to Update Project!");
+        } else if (!empty($old_img)) {
+            foreach ($old_img as $key => $image) {
+                if ($image !== '0' && !empty($image)) {
+                    $image_name = mysqli_real_escape_string($con, $image);
+                    $alt_text = isset($alt[$key]) ? mysqli_real_escape_string($con, $alt[$key]) : '';
+
+                    $idsql = "INSERT INTO tbl_project_img(pid, img, img_alt) VALUES('$id', '$image_name', '$alt_text')";
+                    mysqli_query($con, $idsql);
+                }
+            }
         }
-    }
 
-
-
-    if ($run === TRUE) {
         header("Location: ../../projects.php?success=Project Updated Successfully");
+        exit();
     } else {
         header("Location: ../../projects.php?error=Failed to Update Project!");
+        exit();
     }
 }
 
@@ -325,8 +387,10 @@ if (isset($_POST["add_testimonial"])) {
 
     if ($run === TRUE) {
         header("Location: ../../testimonial.php?success=Testimonial added successfully");
+        exit();
     } else {
         header("Location: ../../testimonial.php?error=Failed to add testimonial!");
+        exit();
     }
 }
 
@@ -354,11 +418,14 @@ if (isset($_POST["delete_testimonial"])) {
             }
 
             header("Location: ../../testimonial.php?success=Testimonial deleted successfully");
+            exit();
         } else {
             header("Location: ../../testimonial.php?error=Failed to delete testimonial!");
+            exit();
         }
     } else {
         header("Location: ../../testimonial.php?error=Testimonial not found!");
+        exit();
     }
 }
 
@@ -385,8 +452,10 @@ if (isset($_POST["update_testimonial"])) {
     $run = mysqli_query($con, $sql);
     if ($run === TRUE) {
         header("Location: ../../testimonial.php?success=Testimonial updated successfully");
+        exit();
     } else {
         header("Location: ../../testimonial.php?error=Failed to update testimonial!");
+        exit();
     }
 }
 
@@ -1141,10 +1210,19 @@ if (isset($_POST['multi_contact_delete']) && !empty($_POST['selected'])) {
     exit;
 }
 
-echo json_encode([
-    'status' => 'error',
-    'message' => 'Invalid request'
-]);
+if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Invalid request'
+    ]);
+    exit();
+} else {
+    $referer = !empty($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : '../../index.php';
+    $separator = (strpos($referer, '?') !== false) ? '&' : '?';
+    header("Location: " . $referer . $separator . "error=" . urlencode("Invalid request or action not found."));
+    exit();
+}
+
 
 
 

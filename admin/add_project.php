@@ -66,7 +66,8 @@ include("assets/includes/db.php");
                 </div>
             <?php } ?>
 
-            <form method="post" action="assets/functions/functions.php" enctype="multipart/form-data">
+            <form method="post" action="assets/functions/functions.php" enctype="multipart/form-data" id="projectForm">
+                <input type="hidden" name="add_project" value="1">
                 <div class="card custom-card-2 mt-2">
                     <div class="card-body p-4 data-table">
                         <div class="row">
@@ -267,6 +268,39 @@ include("assets/includes/db.php");
         $imageDiv.addClass('d-none');
     }
 }
+
+$('#projectForm').on('submit', function(e) {
+    var totalSize = 0;
+    var maxSingleSize = 25 * 1024 * 1024;
+    var maxTotalSize = 50 * 1024 * 1024;
+    var sizeError = false;
+
+    $('input[type="file"]').each(function() {
+        if (this.files) {
+            for (var i = 0; i < this.files.length; i++) {
+                totalSize += this.files[i].size;
+                if (this.files[i].size > maxSingleSize) {
+                    alert('File "' + this.files[i].name + '" exceeds 25MB limit. Please select a smaller image.');
+                    sizeError = true;
+                    return false;
+                }
+            }
+        }
+    });
+
+    if (sizeError) {
+        e.preventDefault();
+        return false;
+    }
+
+    if (totalSize > maxTotalSize) {
+        alert('Total upload size (' + (totalSize / (1024 * 1024)).toFixed(1) + 'MB) exceeds 50MB limit. Please upload fewer or compressed images.');
+        e.preventDefault();
+        return false;
+    }
+
+    $('#submit').prop('disabled', true).text('UPLOADING...');
+});
 
     </script>
 </body>

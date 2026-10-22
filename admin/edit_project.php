@@ -81,7 +81,8 @@ include("assets/includes/db.php");
             $keyword = $row["keyword"];
             ?>
 
-            <form method="post" action="assets/functions/functions.php" enctype="multipart/form-data">
+            <form method="post" action="assets/functions/functions.php" enctype="multipart/form-data" id="editProjectForm">
+                <input type="hidden" name="update_project" value="1">
                 <div class="card custom-card-2 mt-2">
                     <div class="card-body p-4 data-table">
                         <div class="row">
