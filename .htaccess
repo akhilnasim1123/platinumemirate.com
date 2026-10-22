@@ -1,0 +1,27 @@
+# <IfModule mod_rewrite.c>
+# RewriteEngine On
+# RewriteBase /
+# DirectoryIndex index.php
+# RewriteRule ^index.php$ - [L]
+# RewriteCond %{REQUEST_FILENAME} !-f
+# RewriteCond %{REQUEST_FILENAME} !-d
+# RewriteRule . /index.php [L]
+# </IfModule>
+
+Options -Indexes
+RewriteEngine On
+
+# Remove trailing slashes (except for directories)
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)/$ /$1 [L,R=301]
+
+# Rewrite URLs without .php extension
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}.php -f
+RewriteRule ^(.*[^/])$ $1.php [L]
+
+# Blog rewrite rule
+RewriteRule ^blog/(.*)$ blog_view.php?blog=$1 [QSA,NC,L]
+
+# Portfolio rewrite rule
+RewriteRule ^project/(.*)$ project_view.php?project=$1 [QSA,NC,L]

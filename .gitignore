@@ -1,0 +1,11 @@
+
+# Sensitive credentials
+admin/credentials.json
+admin/trickydot-analytics-d1327a1eca29.json
+admin/client_secret.json
+.env
+.env.*
+!.env.example
+admin/credentials.json
+admin/trickydot-analytics-d1327a1eca29.json
+admin/client_secret.json
